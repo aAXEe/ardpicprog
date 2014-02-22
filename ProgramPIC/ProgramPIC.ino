@@ -15,18 +15,29 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+/*
+ * Changes: 
+ * 22.02.2014 Axel Utech <axel.utech@gmail.com>
+ * Device can put into run mode.
+ * Add new command PWRON to activate the power
+*/
+
 #define __PROG_TYPES_COMPAT__
 #include <avr/pgmspace.h>       // For PROGMEM
 
 // Pin mappings for the PIC programming shield.
-#define PIN_MCLR        A1      // 0: MCLR is VPP voltage, 1: Reset PIC
-#define PIN_ACTIVITY    A5      // LED that indicates read/write activity
+#define PIN_VPP        A1      // Pin to control VPP (13 V) at the reset pin
+#define VPP_ON  HIGH            //Apply 13 V to reset
+#define VPP_OFF LOW             //Disconnect 13 V
+
+#define PIN_MCLR_VCC A2        //Pin to connect VCC (5 V) at the reset pin
+#define PIN_MCLR_VCC_ON LOW    // Connect VCC
+#define PIN_MCLR_VCC_OFF HIGH  //Disconnect VCC
+
+#define PIN_ACTIVITY    13      // LED that indicates read/write activity
 #define PIN_VDD         2       // Controls the power to the PIC
 #define PIN_CLOCK       4       // Clock pin
 #define PIN_DATA        7       // Data pin
-
-#define MCLR_RESET      HIGH    // PIN_MCLR state to reset the PIC
-#define MCLR_VPP        LOW     // PIN_MCLR state to apply 13v to MCLR/VPP pin
 
 // All delays are in microseconds.
 #define DELAY_SETTLE    50      // Delay for lines to settle for reset
@@ -169,10 +180,14 @@ void setup()
     Serial.begin(9600);
 
     // Hold the PIC in the powered down/reset state until we are ready for it.
-    pinMode(PIN_MCLR, OUTPUT);
-    pinMode(PIN_VDD, OUTPUT);
-    digitalWrite(PIN_MCLR, MCLR_RESET);
+    digitalWrite(PIN_MCLR_VCC, PIN_MCLR_VCC_OFF);
+    pinMode(PIN_MCLR_VCC, OUTPUT);
+    
+    digitalWrite(PIN_VPP, VPP_OFF);
+    pinMode(PIN_VPP, OUTPUT);
+    
     digitalWrite(PIN_VDD, LOW);
+    pinMode(PIN_VDD, OUTPUT);
 
     // Clock and data are floating until the first PIC command.
     pinMode(PIN_CLOCK, INPUT);
@@ -911,7 +926,14 @@ void cmdErase(const char *args)
 // PWROFF command.
 void cmdPowerOff(const char *args)
 {
-    exitProgramMode();
+    setResetMode();
+    Serial.println("OK");
+}
+
+// PWRON command.
+void cmdPwrOn(const char *args)
+{
+    setRunMode();
     Serial.println("OK");
 }
 
@@ -955,12 +977,16 @@ const char s_cmdSetDeviceArgs[] PROGMEM = "DEVTYPE";
 const char s_cmdPowerOff[] PROGMEM = "PWROFF";
 const char s_cmdPowerOffDesc[] PROGMEM =
     "Powers off the device in the programming socket";
+const char s_cmdPwrOn[] PROGMEM = "PWRON";
+const char s_cmdPwrOnDesc[] PROGMEM =
+    "Puts the device in RUN mode";
 const char s_cmdVersion[] PROGMEM = "PROGRAM_PIC_VERSION";
 const char s_cmdVersionDesc[] PROGMEM =
     "Prints the version of ProgramPIC";
 const char s_cmdHelp[] PROGMEM = "HELP";
 const char s_cmdHelpDesc[] PROGMEM =
     "Prints this help message";
+    
 const command_t commands[] PROGMEM = {
     {s_cmdRead, cmdRead, s_cmdReadDesc, s_cmdReadArgs},
     {s_cmdReadBinary, cmdReadBinary, s_cmdReadBinaryDesc, s_cmdReadArgs},
@@ -971,6 +997,7 @@ const command_t commands[] PROGMEM = {
     {s_cmdDevices, cmdDevices, s_cmdDevicesDesc, 0},
     {s_cmdSetDevice, cmdSetDevice, s_cmdSetDeviceDesc, s_cmdSetDeviceArgs},
     {s_cmdPowerOff, cmdPowerOff, s_cmdPowerOffDesc, 0},
+    {s_cmdPwrOn, cmdPwrOn, s_cmdPwrOnDesc, 0},
     {s_cmdVersion, cmdVersion, s_cmdVersionDesc, 0},
     {s_cmdHelp, cmdHelp, s_cmdHelpDesc, 0},
     {0, 0}
@@ -1080,8 +1107,9 @@ void enterProgramMode()
 
     // Lower MCLR, VDD, DATA, and CLOCK initially.  This will put the
     // PIC into the powered-off, reset state just in case.
-    digitalWrite(PIN_MCLR, MCLR_RESET);
+    digitalWrite(PIN_MCLR_VCC, PIN_MCLR_VCC_OFF);
     digitalWrite(PIN_VDD, LOW);
+    digitalWrite(PIN_VPP, VPP_OFF);
     digitalWrite(PIN_DATA, LOW);
     digitalWrite(PIN_CLOCK, LOW);
 
@@ -1092,12 +1120,12 @@ void enterProgramMode()
     pinMode(PIN_DATA, OUTPUT);
     pinMode(PIN_CLOCK, OUTPUT);
 
-    // Raise MCLR, then VDD.
-    digitalWrite(PIN_MCLR, MCLR_VPP);
+    // Raise MCLR to VPP, then VDD.
+    digitalWrite(PIN_VPP, VPP_ON);
     delayMicroseconds(DELAY_TPPDP);
     digitalWrite(PIN_VDD, HIGH);
     delayMicroseconds(DELAY_THLD0);
-
+    
     // Now in program mode, starting at the first word of program memory.
     state = STATE_PROGRAM;
     pc = 0;
@@ -1109,10 +1137,23 @@ void exitProgramMode()
     // Nothing to do if already out of programming mode.
     if (state == STATE_IDLE)
         return;
+  setResetMode();
+}
 
+//Put deivce to run mode
+void setRunMode(void){
+    exitProgramMode();
+    
+    digitalWrite(PIN_VDD, HIGH);
+    digitalWrite(PIN_MCLR_VCC, PIN_MCLR_VCC_ON);
+}
+
+//Put deivce to reset mode
+void setResetMode(void){
     // Lower MCLR, VDD, DATA, and CLOCK.
-    digitalWrite(PIN_MCLR, MCLR_RESET);
+    digitalWrite(PIN_MCLR_VCC, PIN_MCLR_VCC_OFF);
     digitalWrite(PIN_VDD, LOW);
+    digitalWrite(PIN_VPP, VPP_OFF);
     digitalWrite(PIN_DATA, LOW);
     digitalWrite(PIN_CLOCK, LOW);
 
@@ -1120,7 +1161,7 @@ void exitProgramMode()
     pinMode(PIN_DATA, INPUT);
     pinMode(PIN_CLOCK, INPUT);
 
-    // Now in the idle state with the PIC powered off.
+    // Now in the idle state with the PIC in reset mode.
     state = STATE_IDLE;
     pc = 0;
 }
@@ -1362,3 +1403,4 @@ bool writeWordForced(unsigned long addr, unsigned int word)
     }
     return readBack == word;
 }
+
